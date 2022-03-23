@@ -2,12 +2,12 @@
 """
 import json
 import logging
-import signal
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from subprocess import run, Popen
+from subprocess import Popen
 from time import sleep
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 from django.conf import settings
 from django.db import models
@@ -15,6 +15,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
+from requests import get, put, RequestException
 
 from io_storages.base_models import (
       ExportStorage,
@@ -24,94 +25,103 @@ from io_storages.base_models import (
 )
 from tasks.models import Annotation
 
+MOUNT_SERVER_URL = "http://localhost:9002"
 PFS_DIR = Path("/pfs")
 logger = logging.getLogger(__name__)
 
-mount_processes: Dict[int, Popen] = {}
+_mount_process = None
+_mounts: Dict[int, str] = dict()
 
 
 class PachydermMixin(models.Model):
     repository = models.TextField(_('repository'), blank=True, help_text='Local path')
-    process: Optional[Popen] = None
 
     @property
     def is_mounted(self) -> bool:
         # Maybe we should do something with the stored process here.
-        return self.local_path.exists()
+        return self.mount_point.exists()
 
     @property
     def mount_point(self) -> Path:
-        return PFS_DIR / str(self.repository)
+        return PFS_DIR / str(self.repository_with_branch)
 
     @property
-    def local_path(self) -> Path:
-        repo_name, _ = self.repo_and_branch
-        return self.mount_point / repo_name
+    def repository_with_branch(self) -> str:
+        repo_name, branch = split_branch(str(self.repository))
+        branch = branch or "master"
+        return f"{repo_name}@{branch}"
 
-    @property
-    def repo_and_branch(self) -> Tuple[str, str]:
-        repo_name, _, branch = str(self.repository).partition("@")
-        return repo_name, branch
+    @staticmethod
+    def get_repos() -> Dict[str, "Repo"]:
+        response = get(f"{MOUNT_SERVER_URL}/repos")
+        response.raise_for_status()
+        return {
+            name: Repo.from_dict(repo)
+            for name, repo in response.json().items()
+        }
+
+    @classmethod
+    def safe_start_mount_server(cls) -> None:
+        try:
+            cls.get_repos()
+        except:
+            global _mount_process
+            _mount_process = Popen(["pachctl", "mount-server"])
+            sleep(1)
 
     def mount(self, wait: int = 30, *, writable: bool = False) -> None:
-        repository = f"{self.repository}{'+w' if writable else ''}"
-        command = ["pachctl", "mount", "-r", repository, str(self.mount_point)]
-        process = mount_processes.pop(self.pk, None)
-        if process is not None:
-            logger.warning(f"Sending SIGINT to {process.pid} to cleanup old mount")
-            # Must send SIGINT for pachctl to cleanup mount properly.
-            process.send_signal(signal.SIGINT)
-            process.wait()
+        self.safe_start_mount_server()
+        repository_with_branch = str(self.repository_with_branch)
+        repo_name, branch = split_branch(repository_with_branch)
+        mounted_repo = _mounts.get(self.pk, None)
+        if mounted_repo is not None and mounted_repo != repository_with_branch:
+            self.unmount(mounted_repo)
 
-        self.mount_point.mkdir(exist_ok=True)
-        logger.debug(f"Mounting repository: {self.repository}")
+        logger.debug(f"Mounting repository: {repository_with_branch}")
         if not self.is_mounted:
-            mount_processes[self.pk] = Popen(command)
+            put(
+                url=f"{MOUNT_SERVER_URL}/repos/{repo_name}/{branch}/_mount",
+                params=dict(
+                    name=repository_with_branch,
+                    mode="rw" if writable else "r",
+                ),
+            ).raise_for_status()
+            _mounts[self.pk] = str(repository_with_branch)
             for _ in range(wait):
                 if self.is_mounted:
                     break
                 sleep(1)
 
-    def unmount(self) -> None:
-        logger.debug(f"Unmounting repository: {self.repository}")
-        run(["pachctl", "unmount", str(self.mount_point)], capture_output=True, check=True)
-        del mount_processes[self.pk]
-
-    def clean(self):
-        """
-        Hook for doing any extra model-wide validation after clean() has been
-        called on every field by self.clean_fields. Any ValidationError raised
-        by this method will not be associated with a particular field; it will
-        have a special-case association with the field defined by NON_FIELD_ERRORS.
-        """
-        repo_name, branch = self.repo_and_branch
-        branch = branch or "master"
-        self.repository = f"{repo_name}@{branch}"
-        super().clean()
+    def unmount(self, repository: str) -> None:
+        self.safe_start_mount_server()
+        repo_name, branch = split_branch(repository)
+        logger.debug(f"Unmounting repository: {repository}")
+        put(
+            url=f"{MOUNT_SERVER_URL}/repos/{repo_name}/{branch}/_unmount",
+            params=dict(name=repository)
+        ).raise_for_status()
+        del _mounts[self.pk]
 
     def delete(self, *args, **kwargs):
         super().delete(*args, **kwargs)
         if self.is_mounted:
-            self.unmount()
+            self.unmount(str(self.repository_with_branch))
 
     def validate_connection(self):
+        self.safe_start_mount_server()
         if not PFS_DIR.is_dir():
             raise ValidationError(f"Mount directory {PFS_DIR} does not exist.")
-        repo_name, branch = self.repo_and_branch
-        list_branch = run(["pachctl", "list", "branch", repo_name], capture_output=True)
-        if list_branch.returncode:
+        self.clean()
+        repo_name, branch = split_branch(str(self.repository_with_branch))
+        repositories = self.get_repos()
+        repository = repositories.get(repo_name, None)
+        if not repository:
             raise ValidationError(f"Pachyderm repo not found: {repo_name}")
 
-        branches = {
-            line.split()[0].decode() for line in list_branch.stdout.splitlines()[1:]
-        }
-        if branch not in branches:
-            # Branch might be a commit
-            list_commit = run(["pachctl", "list", "commit", self.repository], capture_output=True)
-            if list_commit.returncode:
-                raise ValidationError(
-                    f"branch/commit {branch} not found for Pachyderm repo {repo_name}"
-                )
+        if branch not in repository.branches:
+            raise ValidationError(
+                f"branch/commit {branch} not found for Pachyderm repo {repo_name}"
+            )
 
 
 class PachydermImportStorage(PachydermMixin, ImportStorage):
@@ -121,7 +131,7 @@ class PachydermImportStorage(PachydermMixin, ImportStorage):
         return False
 
     def iterkeys(self):
-        for file in self.local_path.rglob('*'):
+        for file in self.mount_point.rglob('*'):
             if file.is_file():
                 yield str(file)
 
@@ -142,7 +152,7 @@ class PachydermExportStorage(ExportStorage, PachydermMixin):
     def save_annotation(self, annotation):
         if not self.is_mounted:
             raise RuntimeError(
-                f"Output repository \"{self.repository}\" not mounted\n"
+                f"Output repository \"{self.repository_with_branch}\" not mounted\n"
                 f"Please sync the associated target cloud storage"
             )
 
@@ -151,7 +161,7 @@ class PachydermExportStorage(ExportStorage, PachydermMixin):
 
         # get key that identifies this object in storage
         key = PachydermExportStorageLink.get_key(annotation)
-        key = os.path.join(self.local_path, f"{key}.json")
+        key = os.path.join(self.mount_point, f"{key}.json")
 
         # put object into storage
         with open(key, mode='w') as f:
@@ -164,7 +174,7 @@ class PachydermExportStorage(ExportStorage, PachydermMixin):
         if not self.is_mounted:
             self.mount(writable=True)
         self.save_all_annotations()
-        self.unmount()
+        self.unmount(self.repository_with_branch)
         self.mount(writable=True)
 
 
@@ -183,3 +193,56 @@ def export_annotation_to_local_files(sender, instance, **kwargs):
         for storage in project.io_storages_pachydermexportstorages.all():
             logger.debug(f'Export {instance} to Local Storage {storage}')
             storage.save_annotation(instance)
+
+
+def split_branch(repository: str) -> Tuple[str, str]:
+    repo_name, _, branch = repository.partition("@")
+    return repo_name, branch
+
+
+@dataclass
+class Mount:
+    name: str
+    mode: str
+    state: str
+    status: str
+    mountpoint: str
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "Mount":
+        return cls(
+            name=data['name'],
+            mode=data['mode'],
+            state=data['state'],
+            status=data['status'],
+            mountpoint=data['mountpoint'],
+        )
+
+
+@dataclass
+class Branch:
+    name: str
+    mount: Mount
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "Branch":
+        return cls(
+            name=data['name'],
+            mount=Mount.from_dict(data['mount']),
+        )
+
+
+@dataclass
+class Repo:
+    name: str
+    branches: Dict[str, Branch]
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "Repo":
+        return cls(
+            name=data['name'],
+            branches={
+                name: Branch.from_dict(branch)
+                for name, branch in data['branches'].items()
+            },
+        )
