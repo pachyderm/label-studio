@@ -3,9 +3,7 @@
 import json
 import logging
 import os
-from dataclasses import dataclass
 from pathlib import Path
-from subprocess import Popen
 from time import sleep
 from typing import Dict, Tuple
 
@@ -15,7 +13,6 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
-from requests import get, put, RequestException
 
 from io_storages.base_models import (
       ExportStorage,
@@ -23,13 +20,14 @@ from io_storages.base_models import (
       ImportStorage,
       ImportStorageLink,
 )
+from io_storages.pachyderm.mount_server import (
+    get_repos, mount_repo, unmount_repo, safe_start_mount_server
+)
 from tasks.models import Annotation
 
-MOUNT_SERVER_URL = "http://localhost:9002"
 PFS_DIR = Path("/pfs")
 logger = logging.getLogger(__name__)
 
-_mount_process = None
 _mounts: Dict[int, str] = dict()
 
 
@@ -38,7 +36,6 @@ class PachydermMixin(models.Model):
 
     @property
     def is_mounted(self) -> bool:
-        # Maybe we should do something with the stored process here.
         return self.mount_point.exists()
 
     @property
@@ -51,69 +48,53 @@ class PachydermMixin(models.Model):
         branch = branch or "master"
         return f"{repo_name}@{branch}"
 
-    @staticmethod
-    def get_repos() -> Dict[str, "Repo"]:
-        response = get(f"{MOUNT_SERVER_URL}/repos")
-        response.raise_for_status()
-        return {
-            name: Repo.from_dict(repo)
-            for name, repo in response.json().items()
-        }
-
-    @classmethod
-    def safe_start_mount_server(cls) -> None:
-        try:
-            cls.get_repos()
-        except:
-            global _mount_process
-            _mount_process = Popen(["pachctl", "mount-server"])
-            sleep(1)
-
     def mount(self, wait: int = 30, *, writable: bool = False) -> None:
-        self.safe_start_mount_server()
+        """Mount the pachyderm repository and update state."""
+        safe_start_mount_server()
         repository_with_branch = str(self.repository_with_branch)
         repo_name, branch = split_branch(repository_with_branch)
+
+        # If this entry is being edited, unmount the previous repo if it exists.
         mounted_repo = _mounts.get(self.pk, None)
         if mounted_repo is not None and mounted_repo != repository_with_branch:
-            self.unmount(mounted_repo)
+            mounted_repo_name, mounted_branch = split_branch(mounted_repo)
+            unmount_repo(mounted_repo_name, mounted_branch)
 
         logger.debug(f"Mounting repository: {repository_with_branch}")
         if not self.is_mounted:
-            put(
-                url=f"{MOUNT_SERVER_URL}/repos/{repo_name}/{branch}/_mount",
-                params=dict(
-                    name=repository_with_branch,
-                    mode="rw" if writable else "r",
-                ),
-            ).raise_for_status()
-            _mounts[self.pk] = str(repository_with_branch)
+            mode = "rw" if writable else "r"
+            _mounts[self.pk] = mount_repo(repo_name, branch, mode)
+
             for _ in range(wait):
                 if self.is_mounted:
-                    break
+                    return
                 sleep(1)
+            raise TimeoutError(f"Could not mount repository: {repository_with_branch}")
 
-    def unmount(self, repository: str) -> None:
-        self.safe_start_mount_server()
-        repo_name, branch = split_branch(repository)
-        logger.debug(f"Unmounting repository: {repository}")
-        put(
-            url=f"{MOUNT_SERVER_URL}/repos/{repo_name}/{branch}/_unmount",
-            params=dict(name=repository)
-        ).raise_for_status()
+    def unmount(self) -> None:
+        """Unmount the pachyderm repository and update state."""
+        safe_start_mount_server()
+        repository_with_branch = str(self.repository_with_branch)
+        repo_name, branch = split_branch(repository_with_branch)
+
+        logger.debug(f"Unmounting repository: {repository_with_branch}")
+        unmount_repo(repo_name, branch)
         del _mounts[self.pk]
 
     def delete(self, *args, **kwargs):
+        """Deletes the database entry for this storage device and unmounts the repo."""
         super().delete(*args, **kwargs)
         if self.is_mounted:
-            self.unmount(str(self.repository_with_branch))
+            self.unmount()
 
     def validate_connection(self):
-        self.safe_start_mount_server()
+        """Validates the pachyderm repository and mount-server."""
+        safe_start_mount_server()
         if not PFS_DIR.is_dir():
             raise ValidationError(f"Mount directory {PFS_DIR} does not exist.")
-        self.clean()
+
         repo_name, branch = split_branch(str(self.repository_with_branch))
-        repositories = self.get_repos()
+        repositories = get_repos()
         repository = repositories.get(repo_name, None)
         if not repository:
             raise ValidationError(f"Pachyderm repo not found: {repo_name}")
@@ -131,11 +112,13 @@ class PachydermImportStorage(PachydermMixin, ImportStorage):
         return False
 
     def iterkeys(self):
+        """Iterate through all files in the mount."""
         for file in self.mount_point.rglob('*'):
             if file.is_file():
                 yield str(file)
 
     def get_data(self, key):
+        """This method returns a url that points to specified pachyderm datum."""
         relative_path = str(Path(key).relative_to(PFS_DIR))
         return {settings.DATA_UNDEFINED_NAME: f'{settings.HOSTNAME}/data/pfs/?d={relative_path}'}
 
@@ -143,6 +126,7 @@ class PachydermImportStorage(PachydermMixin, ImportStorage):
         return self._scan_and_create_links(PachydermImportStorageLink)
 
     def sync(self):
+        """Called when the "sync" button is clicked in the UI."""
         self.mount()
         self.scan_and_create_links()
 
@@ -150,6 +134,10 @@ class PachydermImportStorage(PachydermMixin, ImportStorage):
 class PachydermExportStorage(ExportStorage, PachydermMixin):
 
     def save_annotation(self, annotation):
+        """
+        Saves all annotations to files within the export mount.
+        This method itself does not write the files to pachyderm.
+        """
         if not self.is_mounted:
             raise RuntimeError(
                 f"Output repository \"{self.repository_with_branch}\" not mounted\n"
@@ -171,10 +159,11 @@ class PachydermExportStorage(ExportStorage, PachydermMixin):
         PachydermExportStorageLink.create(annotation, self)
 
     def sync(self):
+        """Called when the "sync" button is clicked in the UI."""
         if not self.is_mounted:
             self.mount(writable=True)
         self.save_all_annotations()
-        self.unmount(self.repository_with_branch)
+        self.unmount()
         self.mount(writable=True)
 
 
@@ -196,53 +185,6 @@ def export_annotation_to_local_files(sender, instance, **kwargs):
 
 
 def split_branch(repository: str) -> Tuple[str, str]:
+    """Split repository into (name, branch) at the @ symbol. """
     repo_name, _, branch = repository.partition("@")
     return repo_name, branch
-
-
-@dataclass
-class Mount:
-    name: str
-    mode: str
-    state: str
-    status: str
-    mountpoint: str
-
-    @classmethod
-    def from_dict(cls, data: Dict) -> "Mount":
-        return cls(
-            name=data['name'],
-            mode=data['mode'],
-            state=data['state'],
-            status=data['status'],
-            mountpoint=data['mountpoint'],
-        )
-
-
-@dataclass
-class Branch:
-    name: str
-    mount: Mount
-
-    @classmethod
-    def from_dict(cls, data: Dict) -> "Branch":
-        return cls(
-            name=data['name'],
-            mount=Mount.from_dict(data['mount']),
-        )
-
-
-@dataclass
-class Repo:
-    name: str
-    branches: Dict[str, Branch]
-
-    @classmethod
-    def from_dict(cls, data: Dict) -> "Repo":
-        return cls(
-            name=data['name'],
-            branches={
-                name: Branch.from_dict(branch)
-                for name, branch in data['branches'].items()
-            },
-        )
