@@ -3,7 +3,7 @@ name: "Docker build & push"
 on:
   push:
     branches:
-      - master
+      - pachyderm
     paths:
       - deploy/**
       - label_studio/**
@@ -16,7 +16,7 @@ env:
   CACHE_NAME_PREFIX: v1
   NODE: '14'
   DOCKER_CLI_EXPERIMENTAL: enabled
-  IMAGE_NAME: heartexlabs/label-studio
+  IMAGE_NAME: pachyderm/label-studio
   DOCKER_TAG: 'latest'
 
 jobs:
@@ -48,8 +48,8 @@ jobs:
       - name: Login to DockerHub
         uses: docker/login-action@v1.13.0
         with:
-          username: heartexlabs
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
 
       - name: Get npm cache directory
         id: npm-cache-dir
