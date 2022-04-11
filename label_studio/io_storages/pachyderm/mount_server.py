@@ -1,14 +1,20 @@
 """Functionality for interacting with the pachctl mount-server."""
+import logging
+import urllib.parse
 from dataclasses import dataclass
+from pathlib import Path
 from subprocess import Popen
 from time import sleep
 from typing import Dict, Literal, Optional
 
+import requests
 from requests import get, put, RequestException
 
+HEADERS = {'Accept': '*/*', 'Accept-Encoding': ''}
 MOUNT_MODE = Literal["r", "rw"]
 MOUNT_SERVER_URL = "http://localhost:9002"
 _mount_process: Optional[Popen] = None
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,7 +47,7 @@ class Branch:
     def from_dict(cls, data: Dict) -> "Branch":
         return cls(
             name=data['name'],
-            mount=Mount.from_dict(data['mount']),
+            mount=Mount.from_dict(data['mount'][0]),
         )
 
 
@@ -78,7 +84,14 @@ def mount_repo(
     """Mount the specified branch of the specified pachyderm repository"""
     name = name or f"{repo}@{branch}"
     url = f"{MOUNT_SERVER_URL}/repos/{repo}/{branch}/_mount"
-    put(url, params=dict(name=name, mode=mode)).raise_for_status()
+    params = urllib.parse.urlencode(dict(name=name, mode=mode), safe='@')
+    response = requests.put(url, params=params)
+    logger.warning(list(Path(f'/pfs/{name}').glob("*")))
+    logger.warning(response.request.url)
+    logger.warning(response.request.headers)
+    logger.warning(response.text)
+    response.raise_for_status()
+
     return name
 
 

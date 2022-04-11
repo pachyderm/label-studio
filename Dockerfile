@@ -21,8 +21,9 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-RUN curl -o /tmp/pachctl.deb -L https://github.com/pachyderm/pachyderm/releases/download/v2.1.4/pachctl_2.1.4_amd64.deb\
- && dpkg -i /tmp/pachctl.deb
+#RUN curl -o /tmp/pachctl.deb -L https://github.com/pachyderm/pachyderm/releases/download/v2.1.5/pachctl_2.1.5_amd64.deb\
+# && dpkg -i /tmp/pachctl.deb
+COPY pachctl /usr/bin/pachctl
 
 RUN mkdir /pfs
 COPY deploy/init-pachyderm.sh .

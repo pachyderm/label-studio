@@ -33,10 +33,13 @@ _mounts: Dict[int, str] = dict()
 
 class PachydermMixin(models.Model):
     repository = models.TextField(_('repository'), blank=True, help_text='Local path')
+    use_blob_urls = models.BooleanField(
+        _('use_blob_urls'), default=False,
+        help_text='Interpret objects as BLOBs and generate URLs')
 
     @property
     def is_mounted(self) -> bool:
-        return self.mount_point.exists()
+        return os.path.exists(str(self.mount_point))
 
     @property
     def mount_point(self) -> Path:
@@ -58,13 +61,13 @@ class PachydermMixin(models.Model):
         mounted_repo = _mounts.get(self.pk, None)
         if mounted_repo is not None and mounted_repo != repository_with_branch:
             mounted_repo_name, mounted_branch = split_branch(mounted_repo)
-            unmount_repo(mounted_repo_name, mounted_branch)
+            unmount_repo(mounted_repo_name, mounted_branch, name=repository_with_branch)
 
         logger.debug(f"Mounting repository: {repository_with_branch}")
         if not self.is_mounted:
             mode = "rw" if writable else "r"
-            _mounts[self.pk] = mount_repo(repo_name, branch, mode)
-
+            _mounts[self.pk] = mount_repo(repo_name, branch, mode, name=repository_with_branch)
+            sleep(1)
             for _ in range(wait):
                 if self.is_mounted:
                     return
@@ -78,14 +81,14 @@ class PachydermMixin(models.Model):
         repo_name, branch = split_branch(repository_with_branch)
 
         logger.debug(f"Unmounting repository: {repository_with_branch}")
-        unmount_repo(repo_name, branch)
+        unmount_repo(repo_name, branch, name=repository_with_branch)
         del _mounts[self.pk]
 
     def delete(self, *args, **kwargs):
         """Deletes the database entry for this storage device and unmounts the repo."""
-        super().delete(*args, **kwargs)
         if self.is_mounted:
             self.unmount()
+        super().delete(*args, **kwargs)
 
     def validate_connection(self):
         """Validates the pachyderm repository and mount-server."""
@@ -119,8 +122,21 @@ class PachydermImportStorage(PachydermMixin, ImportStorage):
 
     def get_data(self, key):
         """This method returns a url that points to specified pachyderm datum."""
-        relative_path = str(Path(key).relative_to(PFS_DIR))
-        return {settings.DATA_UNDEFINED_NAME: f'{settings.HOSTNAME}/data/pfs/?d={relative_path}'}
+        if self.use_blob_urls:
+            relative_path = str(Path(key).relative_to(PFS_DIR))
+            return {settings.DATA_UNDEFINED_NAME: f'{settings.HOSTNAME}/data/pfs/?d={relative_path}'}
+
+        try:
+            with Path(key).open(encoding='utf8') as f:
+                value = json.load(f)
+        except (UnicodeDecodeError, json.decoder.JSONDecodeError):
+            raise ValueError(
+                f"Can\'t import JSON-formatted tasks from {key}. If you're trying to import binary objects, "
+                f"perhaps you've forgot to enable \"Treat every bucket object as a source file\" option?")
+
+        if not isinstance(value, dict):
+            raise ValueError(f"Error on key {key}: For {self.__class__.__name__} your JSON file must be a dictionary with one task.")  # noqa
+        return value
 
     def scan_and_create_links(self):
         return self._scan_and_create_links(PachydermImportStorageLink)
