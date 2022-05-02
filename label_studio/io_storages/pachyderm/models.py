@@ -4,7 +4,6 @@ import json
 import logging
 import os
 from pathlib import Path
-from time import sleep
 from typing import Dict, Tuple
 
 from django.conf import settings
@@ -67,11 +66,9 @@ class PachydermMixin(models.Model):
         if not self.is_mounted:
             mode = "rw" if writable else "r"
             _mounts[self.pk] = mount_repo(repo_name, branch, mode, name=repository_with_branch)
-            sleep(1)
             for _ in range(wait):
                 if self.is_mounted:
                     return
-                sleep(1)
             raise TimeoutError(f"Could not mount repository: {repository_with_branch}")
 
     def unmount(self) -> None:
