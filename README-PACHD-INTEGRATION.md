@@ -15,6 +15,7 @@ build the dev container:
 
 run the dev container:
 (Note: I'm forwarding port 5476 on my "server" to 8080 within the container)
+    
     > docker run --rm --device=/dev/fuse --cap-add SYS_ADMIN -p 192.168.7.137:5476:8080 --name label-studio label-studio:pachctl
 
 This usually takes a bit of time to initialize itself. Eventually `http://192.168.7.137:5476` will resolve

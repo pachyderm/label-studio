@@ -144,6 +144,11 @@ class PachydermImportStorage(PachydermMixin, ImportStorage):
     def sync(self):
         """Called when the "sync" button is clicked in the UI."""
         self.mount()
+
+        # Unmount and mount as a workaround for bug. TODO: INT-597
+        self.unmount()
+        self.mount()
+
         self.scan_and_create_links()
 
 

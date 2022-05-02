@@ -2,7 +2,6 @@
 import logging
 import urllib.parse
 from dataclasses import dataclass
-from pathlib import Path
 from subprocess import Popen
 from time import sleep
 from typing import Dict, Literal, Optional
@@ -86,10 +85,6 @@ def mount_repo(
     url = f"{MOUNT_SERVER_URL}/repos/{repo}/{branch}/_mount"
     params = urllib.parse.urlencode(dict(name=name, mode=mode), safe='@')
     response = requests.put(url, params=params)
-    logger.warning(list(Path(f'/pfs/{name}').glob("*")))
-    logger.warning(response.request.url)
-    logger.warning(response.request.headers)
-    logger.warning(response.text)
     response.raise_for_status()
 
     return name

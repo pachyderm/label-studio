@@ -21,7 +21,8 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-#RUN curl -o /tmp/pachctl.deb -L https://github.com/pachyderm/pachyderm/releases/download/v2.1.5/pachctl_2.1.5_amd64.deb\
+# TODO: INT-582 update to bug-fixed pachctl version when released.
+#RUN curl -o /tmp/pachctl.deb -L https://github.com/pachyderm/pachyderm/releases/download/v2.1.6/pachctl_2.1.6_amd64.deb\
 # && dpkg -i /tmp/pachctl.deb
 COPY pachctl /usr/bin/pachctl
 
