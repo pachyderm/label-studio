@@ -67,6 +67,13 @@ class Repo:
         )
 
 
+def get_config() -> Dict:
+    """Returns the JSON response from GET /config"""
+    response = get(f"{MOUNT_SERVER_URL}/config")
+    response.raise_for_status()
+    return response.json()
+
+
 def get_repos() -> Dict[str, "Repo"]:
     """Returns the deserialized response from GET /repos"""
     response = get(f"{MOUNT_SERVER_URL}/repos")
@@ -98,19 +105,15 @@ def unmount_repo(repo: str, branch: str, name: Optional[str] = None) -> None:
 
 
 def safe_start_mount_server(*, wait: int = 30) -> None:
-    """Start the mount-server if it is not already started.
-
-    This uses GET /repos to check if the mount-server is started which
-    is the current best option but scales poorly with # of repositories.
-    """
+    """Start the mount-server if it is not already started."""
     try:
-        get_repos()
+        get_config()
     except RequestException:
         global _mount_process
         _mount_process = Popen(["pachctl", "mount-server"])
         for _ in range(wait):
             try:
-                get_repos()
+                get_config()
                 return
             except RequestException:
                 sleep(1)
