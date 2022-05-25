@@ -1,14 +1,19 @@
 """Functionality for interacting with the pachctl mount-server."""
+import logging
+import urllib.parse
 from dataclasses import dataclass
 from subprocess import Popen
 from time import sleep
 from typing import Dict, Literal, Optional
 
+import requests
 from requests import get, put, RequestException
 
+HEADERS = {'Accept': '*/*', 'Accept-Encoding': ''}
 MOUNT_MODE = Literal["r", "rw"]
 MOUNT_SERVER_URL = "http://localhost:9002"
 _mount_process: Optional[Popen] = None
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,7 +46,7 @@ class Branch:
     def from_dict(cls, data: Dict) -> "Branch":
         return cls(
             name=data['name'],
-            mount=Mount.from_dict(data['mount']),
+            mount=Mount.from_dict(data['mount'][0]),
         )
 
 
@@ -62,6 +67,13 @@ class Repo:
         )
 
 
+def get_config() -> Dict:
+    """Returns the JSON response from GET /config"""
+    response = get(f"{MOUNT_SERVER_URL}/config")
+    response.raise_for_status()
+    return response.json()
+
+
 def get_repos() -> Dict[str, "Repo"]:
     """Returns the deserialized response from GET /repos"""
     response = get(f"{MOUNT_SERVER_URL}/repos")
@@ -78,7 +90,10 @@ def mount_repo(
     """Mount the specified branch of the specified pachyderm repository"""
     name = name or f"{repo}@{branch}"
     url = f"{MOUNT_SERVER_URL}/repos/{repo}/{branch}/_mount"
-    put(url, params=dict(name=name, mode=mode)).raise_for_status()
+    params = urllib.parse.urlencode(dict(name=name, mode=mode), safe='@')
+    response = requests.put(url, params=params)
+    response.raise_for_status()
+
     return name
 
 
@@ -90,19 +105,15 @@ def unmount_repo(repo: str, branch: str, name: Optional[str] = None) -> None:
 
 
 def safe_start_mount_server(*, wait: int = 30) -> None:
-    """Start the mount-server if it is not already started.
-
-    This uses GET /repos to check if the mount-server is started which
-    is the current best option but scales poorly with # of repositories.
-    """
+    """Start the mount-server if it is not already started."""
     try:
-        get_repos()
+        get_config()
     except RequestException:
         global _mount_process
         _mount_process = Popen(["pachctl", "mount-server"])
         for _ in range(wait):
             try:
-                get_repos()
+                get_config()
                 return
             except RequestException:
                 sleep(1)

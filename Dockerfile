@@ -21,7 +21,7 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-RUN curl -o /tmp/pachctl.deb -L https://github.com/pachyderm/pachyderm/releases/download/v2.1.4/pachctl_2.1.4_amd64.deb\
+RUN curl -o /tmp/pachctl.deb -L https://github.com/pachyderm/pachyderm/releases/download/v2.2.0-rc.1/pachctl_2.2.0-rc.1_amd64.deb\
  && dpkg -i /tmp/pachctl.deb
 
 RUN mkdir /pfs
