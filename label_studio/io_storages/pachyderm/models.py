@@ -89,7 +89,9 @@ class PachydermMixin(models.Model):
         """
         repo_name, branch = self.repo_and_branch
         branch = branch or "master"
-        self.repository = f"{repo_name}@{branch}"
+        project, _, repo_name = repo_name.partition("/")
+        project = project or "default"
+        self.repository = f"{project}/{repo_name}@{branch}"
         super().clean()
 
     def delete(self, *args, **kwargs):
