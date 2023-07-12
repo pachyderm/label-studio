@@ -1,0 +1,27 @@
+# 1x3 grid
+title_bucket_prefix: &title_bucket_prefix
+  - type: text
+    name: title
+    label: Storage Title
+  - type: text
+    name: repository
+    label: Repository Name
+    required: true
+
+ImportStorage:
+  # Title, Bucket, Prefix
+  - columnCount: 2
+    fields: *title_bucket_prefix
+
+  - columnCount: 2
+    columns:
+      - width: 371
+        fields:
+          - type: toggle
+            name: use_blob_urls
+            label: Treat every bucket object as a source file
+            description: If unchecked, treat every bucket object as a JSON-formatted task. Optional
+
+ExportStorage:
+  - columnCount: 3
+    fields: *title_bucket_prefix

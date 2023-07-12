@@ -4,6 +4,7 @@ from .s3.api import S3ImportStorageListAPI, S3ExportStorageListAPI
 from .gcs.api import GCSImportStorageListAPI, GCSExportStorageListAPI
 from .azure_blob.api import AzureBlobImportStorageListAPI, AzureBlobExportStorageListAPI
 from .redis.api import RedisImportStorageListAPI, RedisExportStorageListAPI
+from .pachyderm.api import PachydermImportStorageListAPI, PachydermExportStorageListAPI
 
 
 logger = logging.getLogger(__name__)
@@ -35,4 +36,10 @@ def get_storage_list():
             'import_list_api': RedisImportStorageListAPI,
             'export_list_api': RedisExportStorageListAPI,
         },
+        {
+            'name': 'pachyderm',
+            'title': 'Pachyderm',
+            'import_list_api': PachydermImportStorageListAPI,
+            'export_list_api': PachydermExportStorageListAPI,
+        }
     ]
