@@ -8,12 +8,15 @@ from pathlib import Path
 from subprocess import run, Popen
 from time import sleep
 from typing import Dict, Optional, Tuple
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
+from pachyderm_sdk import Client
+from pachyderm_sdk.api import pfs
 from rest_framework.exceptions import ValidationError
 
 from io_storages.base_models import (
@@ -21,64 +24,46 @@ from io_storages.base_models import (
       ExportStorageLink,
       ImportStorage,
       ImportStorageLink,
+      ProjectStorageMixin,
 )
 from tasks.models import Annotation
 
 PFS_DIR = Path("/pfs")
 logger = logging.getLogger(__name__)
 
-mount_processes: Dict[int, Popen] = {}
+clients_cache = {}
 
 
 class PachydermMixin(models.Model):
-    repository = models.TextField(_('repository'), blank=True, help_text='Local path')
-    process: Optional[Popen] = None
+    pach_project = models.TextField(_('project'), blank=True, help_text="Project")
+    pach_repo = models.TextField(_('repository'), blank=True, help_text='Repository')
+    pach_branch = models.TextField(_('branch'), blank=True, help_text='Branch')
+    pach_commit = models.TextField(_('commit'), blank=True, help_text='Commit')
+    pachd_address = models.TextField(_('pachyderm_address'), blank=True, help_text='Pachyderm Address')
     use_blob_urls = models.BooleanField(
         _('use_blob_urls'), default=False,
-        help_text='Interpret objects as BLOBs and generate URLs')
+        help_text='Interpret objects as BLOBs and generate URLs'
+    )
+
+    def get_client(self):
+        if self.pachd_address in clients_cache:
+            return clients_cache[self.pachd_address]
+
+        client = Client.from_pachd_address(pachd_address=str(self.pachd_address))
+        clients_cache[self.pachd_address] = client
+        return client
 
     @property
-    def is_mounted(self) -> bool:
-        # Maybe we should do something with the stored process here.
-        return self.local_path.exists()
+    def branch(self) -> pfs.Commit:
+        return pfs.Branch.from_uri(
+            f"{self.pach_project}/{self.pach_repo}@{self.pach_branch}"
+        )
 
     @property
-    def mount_point(self) -> Path:
-        return PFS_DIR / str(self.repository)
-
-    @property
-    def local_path(self) -> Path:
-        repo_name, _ = self.repo_and_branch
-        return self.mount_point / repo_name
-
-    @property
-    def repo_and_branch(self) -> Tuple[str, str]:
-        repo_name, _, branch = str(self.repository).partition("@")
-        return repo_name, branch
-
-    def mount(self, wait: int = 30, *, writable: bool = False) -> None:
-        repository = f"{self.repository}{'+w' if writable else ''}"
-        command = ["pachctl", "mount", "-r", repository, str(self.mount_point)]
-        process = mount_processes.pop(self.pk, None)
-        if process is not None:
-            logger.warning(f"Sending SIGINT to {process.pid} to cleanup old mount")
-            # Must send SIGINT for pachctl to cleanup mount properly.
-            process.send_signal(signal.SIGINT)
-            process.wait()
-
-        self.mount_point.mkdir(exist_ok=True)
-        logger.debug(f"Mounting repository: {self.repository}")
-        if not self.is_mounted:
-            mount_processes[self.pk] = Popen(command)
-            for _ in range(wait):
-                if self.is_mounted:
-                    break
-                sleep(1)
-
-    def unmount(self) -> None:
-        logger.debug(f"Unmounting repository: {self.repository}")
-        run(["pachctl", "unmount", str(self.mount_point)], capture_output=True, check=True)
-        del mount_processes[self.pk]
+    def commit(self) -> pfs.Commit:
+        return pfs.Commit.from_uri(
+            f"{self.pach_project}/{self.pach_repo}@{self.pach_commit}"
+        )
 
     def clean(self):
         """
@@ -87,60 +72,52 @@ class PachydermMixin(models.Model):
         by this method will not be associated with a particular field; it will
         have a special-case association with the field defined by NON_FIELD_ERRORS.
         """
-        repo_name, branch = self.repo_and_branch
-        branch = branch or "master"
-        self.repository = f"{repo_name}@{branch}"
+        if not self.pach_project:
+            self.pach_project = "default"
+        if not self.pach_branch:
+            self.pach_branch = "master"
+        if not self.pach_commit:
+            client = self.get_client()
+            branch = pfs.Branch.from_uri(f"{self.pach_repo}@{self.pach_branch}")
+            branch_info = client.pfs.inspect_branch(branch=branch)
+            self.pach_commit = branch_info.head.id
         super().clean()
 
-    def delete(self, *args, **kwargs):
-        if self.is_mounted:
-            self.unmount()
-        super().delete(*args, **kwargs)
+    def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
+        self.clean()
+        super().save(force_insert, force_update, using, update_fields)
 
-    def validate_connection(self):
-        if not PFS_DIR.is_dir():
-            raise ValidationError(f"Mount directory {PFS_DIR} does not exist.")
-        repo_name, branch = self.repo_and_branch
-        list_branch = run(["pachctl", "list", "branch", repo_name], capture_output=True)
-        if list_branch.returncode:
-            raise ValidationError(f"Pachyderm repo not found: {repo_name}")
-
-        branches = {
-            line.split()[0].decode() for line in list_branch.stdout.splitlines()[1:]
-        }
-        if branch not in branches:
-            # Branch might be a commit
-            list_commit = run(["pachctl", "list", "commit", self.repository], capture_output=True)
-            if list_commit.returncode:
-                raise ValidationError(
-                    f"branch/commit {branch} not found for Pachyderm repo {repo_name}"
-                )
+    def validate_connection(self, client = None):
+        logger.debug('validate_connection')
+        self.clean()
+        if client is None:
+            client = self.get_client()
+        if not client.pfs.commit_exists(self.commit):
+            raise ValidationError(f"Commit {self.commit} does not exist.")
 
 
-class PachydermImportStorage(PachydermMixin, ImportStorage):
-    url_scheme = 'https'
-
-    def can_resolve_url(self, url):
-        return False
+class PachydermImportStorageBase(PachydermMixin, ImportStorage):
+    url_scheme = 'http'
 
     def iterkeys(self):
-        for file in self.local_path.rglob('*'):
-            if file.is_file():
-                yield str(file)
+        client = self.get_client()
+        base = pfs.File(commit=self.commit, path="/")
+        for file_info in client.pfs.list_file(file=base):
+            yield file_info.file.path
 
     def get_data(self, key):
+        client = self.get_client()
+        file = pfs.File(commit=self.commit, path=key)
+
         if self.use_blob_urls:
-            relative_path = str(Path(key).relative_to(PFS_DIR))
-            return {settings.DATA_UNDEFINED_NAME: f'{settings.HOSTNAME}/data/pfs/?d={relative_path}'}
+            result = run(['pachctl', 'misc', 'generate-download-url', file.as_uri()], capture_output=True)
+            data_key = settings.DATA_UNDEFINED_NAME
+            redirect = f"{self.url_scheme}://{self.pachd_address}/archive/{result.stdout.decode().strip()}.zip"
+            archive_path = file.as_uri().replace("@", "/").replace(":", "")
+            return {data_key: f'{settings.HOSTNAME}/data/pfs/?redirect={redirect}&d={archive_path}'}
 
-        try:
-            with Path(key).open(encoding='utf8') as f:
-                value = json.load(f)
-        except (UnicodeDecodeError, json.decoder.JSONDecodeError):
-            raise ValueError(
-                f"Can\'t import JSON-formatted tasks from {key}. If you're trying to import binary objects, "
-                f"perhaps you've forgot to enable \"Treat every bucket object as a source file\" option?")
-
+        with client.pfs.pfs_file(file) as obj:
+            value = json.loads(obj)
         if not isinstance(value, dict):
             raise ValueError(f"Error on key {key}: For {self.__class__.__name__} your JSON file must be a dictionary with one task.")  # noqa
         return value
@@ -148,40 +125,32 @@ class PachydermImportStorage(PachydermMixin, ImportStorage):
     def scan_and_create_links(self):
         return self._scan_and_create_links(PachydermImportStorageLink)
 
-    def sync(self):
-        self.mount()
-        self.scan_and_create_links()
+    class Meta:
+        abstract = True
+
+
+class PachydermImportStorage(ProjectStorageMixin, PachydermImportStorageBase):
+
+    class Meta:
+        abstract = False
 
 
 class PachydermExportStorage(PachydermMixin, ExportStorage):
 
     def save_annotation(self, annotation):
-        if not self.is_mounted:
-            raise RuntimeError(
-                f"Output repository \"{self.repository}\" not mounted\n"
-                f"Please sync the associated target cloud storage"
-            )
-
+        client = self.get_client()
         logger.debug(f'Creating new object on {self.__class__.__name__} Storage {self} for annotation {annotation}')
         ser_annotation = self._get_serialized_data(annotation)
 
         # get key that identifies this object in storage
         key = PachydermExportStorageLink.get_key(annotation)
-        key = os.path.join(self.local_path, f"{key}.json")
 
         # put object into storage
-        with open(key, mode='w') as f:
-            json.dump(ser_annotation, f, indent=2)
+        with client.pfs.commit(branch=self.branch) as commit:
+            commit.put_file_from_bytes(path=key, data=json.dumps(ser_annotation, indent=2))
 
         # Create export storage link
         PachydermExportStorageLink.create(annotation, self)
-
-    def sync(self):
-        if not self.is_mounted:
-            self.mount(writable=True)
-        self.save_all_annotations()
-        self.unmount()
-        self.mount(writable=True)
 
 
 class PachydermImportStorageLink(ImportStorageLink):
@@ -193,7 +162,7 @@ class PachydermExportStorageLink(ExportStorageLink):
 
 
 @receiver(post_save, sender=Annotation)
-def export_annotation_to_local_files(sender, instance, **kwargs):
+def export_annotation_to_pfs(sender, instance, **kwargs):
     project = instance.task.project
     if hasattr(project, 'io_storages_pachydermexportstorages'):
         for storage in project.io_storages_pachydermexportstorages.all():

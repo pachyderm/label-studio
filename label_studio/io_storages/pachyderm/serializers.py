@@ -14,6 +14,10 @@ class PachydermImportStorageSerializer(ImportStorageSerializer):
         model = PachydermImportStorage
         fields = '__all__'
 
+    def to_representation(self, instance):
+        result = super().to_representation(instance)
+        return result
+
     def validate(self, data):
         # Validate pachyderm resource exists
         data = super(PachydermImportStorageSerializer, self).validate(data)
@@ -31,6 +35,10 @@ class PachydermExportStorageSerializer(ExportStorageSerializer):
     class Meta:
         model = PachydermExportStorage
         fields = '__all__'
+
+    def to_representation(self, instance):
+        result = super().to_representation(instance)
+        return result
 
     def validate(self, data):
         # Validate pachyderm resource exists
