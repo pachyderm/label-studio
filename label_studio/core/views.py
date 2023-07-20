@@ -207,6 +207,7 @@ def pachyderm_data(request):
     user = request.user
     path = request.GET.get('d')
     logging.warning(f"{user} -- {path}")
+    logging.warning("hello world")
 
     if path and request.user.is_authenticated:
         full_path = Path(safe_join("/pfs", path))
