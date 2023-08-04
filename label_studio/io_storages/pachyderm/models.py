@@ -147,7 +147,7 @@ class PachydermExportStorage(PachydermMixin, ExportStorage):
 
         # put object into storage
         with client.pfs.commit(branch=self.branch) as commit:
-            commit.put_file_from_bytes(path=key, data=json.dumps(ser_annotation, indent=2))
+            commit.put_file_from_bytes(path=key, data=json.dumps(ser_annotation, indent=2).encode('utf-8'))
 
         # Create export storage link
         PachydermExportStorageLink.create(annotation, self)
