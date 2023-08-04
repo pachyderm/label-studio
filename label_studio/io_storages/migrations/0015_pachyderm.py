@@ -136,6 +136,8 @@ class Migration(migrations.Migration):
                                      verbose_name='object exists')),
                 ('created_at',
                  models.DateTimeField(auto_now_add=True, help_text='Creation time', verbose_name='created at')),
+                ('updated_at',
+                 models.DateTimeField(auto_now=True, help_text='Update time', verbose_name='updated at')),
                 ('annotation', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE,
                                                     related_name='io_storages_pachydermexportstoragelink',
                                                     to='tasks.annotation')),
