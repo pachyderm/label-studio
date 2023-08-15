@@ -1,0 +1,49 @@
+# 3x2 grid
+title_bucket_prefix: &title_bucket_prefix
+  - type: text
+    name: title
+    label: Storage Title
+  - null
+  - type: text
+    name: pach_project
+    label: Project Name
+    placeholder: default
+  - type: text
+    name: pach_repo
+    label: Repository Name
+    required: true
+  - type: text
+    name: pach_branch
+    label: Branch Name
+  - type: text
+    name: pach_commit
+    label: Commit ID
+    required: true
+
+pach_params: &pach_params
+  - type: text
+    name: pachd_address
+    label: Pachyderm Address
+    placeholder: localhost:80
+
+
+ImportStorage:
+  # Title, Bucket, Prefix
+  - columnCount: 2
+    fields: *title_bucket_prefix
+  - columnCount: 1
+    fields: *pach_params
+  - columnCount: 2
+    columns:
+      - width: 371
+        fields:
+          - type: toggle
+            name: use_blob_urls
+            label: Treat every bucket object as a source file
+            description: If unchecked, treat every bucket object as a JSON-formatted task. Optional
+
+ExportStorage:
+  - columnCount: 2
+    fields: *title_bucket_prefix
+  - columnCount: 1
+    fields: *pach_params

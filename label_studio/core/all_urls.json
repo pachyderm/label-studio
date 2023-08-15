@@ -840,6 +840,66 @@
         "decorators": ""
     },
     {
+        "url": "/api/storages/pachyderm",
+        "module": "io_storages.pachyderm.api.PachydermImportStorageListAPI",
+        "name": "storages:api:storage-pachyderm-list",
+        "decorators": ""
+    },
+    {
+        "url": "/api/storages/pachyderm/<int:pk>",
+        "module": "io_storages.pachyderm.api.PachydermImportStorageDetailAPI",
+        "name": "storages:api:storage-pachyderm-detail",
+        "decorators": ""
+    },
+    {
+        "url": "/api/storages/pachyderm/<int:pk>/sync",
+        "module": "io_storages.pachyderm.api.PachydermImportStorageSyncAPI",
+        "name": "storages:api:storage-pachyderm-sync",
+        "decorators": ""
+    },
+    {
+        "url": "/api/storages/pachyderm/validate",
+        "module": "io_storages.pachyderm.api.PachydermImportStorageValidateAPI",
+        "name": "storages:api:storage-pachyderm-validate",
+        "decorators": ""
+    },
+    {
+        "url": "/api/storages/pachyderm/form",
+        "module": "io_storages.pachyderm.api.PachydermImportStorageFormLayoutAPI",
+        "name": "storages:api:storage-pachyderm-form",
+        "decorators": ""
+    },
+    {
+        "url": "/api/storages/export/pachyderm",
+        "module": "io_storages.pachyderm.api.PachydermExportStorageListAPI",
+        "name": "storages:api:export-storage-pachyderm-list",
+        "decorators": ""
+    },
+    {
+        "url": "/api/storages/export/pachyderm/<int:pk>",
+        "module": "io_storages.pachyderm.api.PachydermExportStorageDetailAPI",
+        "name": "storages:api:export-storage-pachyderm-detail",
+        "decorators": ""
+    },
+    {
+        "url": "/api/storages/export/pachyderm/<int:pk>/sync",
+        "module": "io_storages.pachyderm.api.PachydermExportStorageSyncAPI",
+        "name": "storages:api:export-storage-pachyderm-sync",
+        "decorators": ""
+    },
+    {
+        "url": "/api/storages/export/pachyderm/validate",
+        "module": "io_storages.pachyderm.api.PachydermExportStorageValidateAPI",
+        "name": "storages:api:export-storage-pachyderm-validate",
+        "decorators": ""
+    },
+    {
+        "url": "/api/storages/export/pachyderm/form",
+        "module": "io_storages.pachyderm.api.PachydermExportStorageFormLayoutAPI",
+        "name": "storages:api:export-storage-pachyderm-form",
+        "decorators": ""
+    },
+    {
         "url": "/api/storages/localfiles/",
         "module": "io_storages.localfiles.api.LocalFilesImportStorageListAPI",
         "name": "storages:api:storage-localfiles-list",
@@ -1017,6 +1077,12 @@
         "url": "/data/local-files/",
         "module": "core.views.localfiles_data",
         "name": "localfiles_data",
+        "decorators": ""
+    },
+    {
+        "url": "/data/pfs/",
+        "module": "core.views.pachyderm_data",
+        "name": "pachyderm_data",
         "decorators": ""
     },
     {
