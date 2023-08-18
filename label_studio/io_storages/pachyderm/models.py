@@ -40,6 +40,7 @@ class PachydermMixin(models.Model):
     pach_branch = models.TextField(_('branch'), blank=True, help_text='Branch')
     pach_commit = models.TextField(_('commit'), blank=True, help_text='Commit')
     pachd_address = models.TextField(_('pachyderm_address'), blank=True, help_text='Pachyderm Address')
+    pach_authn_token = models.TextField(_('pach_authn_token'), blank=True, help_text='Pachyderm Authn Token')
     use_blob_urls = models.BooleanField(
         _('use_blob_urls'), default=False,
         help_text='Interpret objects as BLOBs and generate URLs'
@@ -49,7 +50,10 @@ class PachydermMixin(models.Model):
         if self.pachd_address in clients_cache:
             return clients_cache[self.pachd_address]
 
-        client = Client.from_pachd_address(pachd_address=str(self.pachd_address))
+        client = Client.from_pachd_address(
+            pachd_address=str(self.pachd_address),
+            auth_token=str(self.pach_authn_token) or None
+        )
         clients_cache[self.pachd_address] = client
         return client
 
@@ -114,7 +118,10 @@ class PachydermImportStorageBase(PachydermMixin, ImportStorage):
             data_key = settings.DATA_UNDEFINED_NAME
             redirect = f"{self.url_scheme}://{self.pachd_address}/archive/{result.stdout.decode().strip()}.zip"
             archive_path = file.as_uri().replace("@", "/").replace(":", "")
-            return {data_key: f'{settings.HOSTNAME}/data/pfs/?redirect={redirect}&d={archive_path}'}
+            url = f'{settings.HOSTNAME}/data/pfs/?redirect={redirect}&d={archive_path}'
+            if self.pach_authn_token:
+                url += f"&authn-token={self.pach_authn_token}"
+            return {data_key: url}
 
         with client.pfs.pfs_file(file) as obj:
             value = json.loads(obj)

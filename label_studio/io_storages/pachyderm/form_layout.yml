@@ -25,6 +25,9 @@ pach_params: &pach_params
     name: pachd_address
     label: Pachyderm Address
     placeholder: localhost:80
+  - type: text
+    name: pach_authn_token
+    label: Auth Token
 
 
 ImportStorage:

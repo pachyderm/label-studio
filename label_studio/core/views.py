@@ -206,6 +206,9 @@ def pachyderm_data(request):
     """Serving files for LocalFilesImportStorage"""
     path = request.GET.get('d')
     redirect_url = request.GET.get('redirect')
+    authn_token = request.GET.get('authn-token')
+    if authn_token:
+        redirect_url += f"?authn-token={authn_token}"
 
     if path and redirect_url and request.user.is_authenticated:
         content_type, encoding = mimetypes.guess_type(str(path))
