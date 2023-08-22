@@ -2,13 +2,7 @@
 """
 import json
 import logging
-import signal
-import os
 from pathlib import Path
-from subprocess import run, Popen
-from time import sleep
-from typing import Dict, Optional, Tuple
-from urllib.parse import urlparse
 
 from django.conf import settings
 from django.db import models
@@ -54,7 +48,7 @@ class PachydermMixin(models.Model):
         return client
 
     @property
-    def branch(self) -> pfs.Commit:
+    def branch(self) -> pfs.Branch:
         return pfs.Branch.from_uri(
             f"{self.pach_project}/{self.pach_repo}@{self.pach_branch}"
         )
@@ -110,11 +104,10 @@ class PachydermImportStorageBase(PachydermMixin, ImportStorage):
         file = pfs.File(commit=self.commit, path=key)
 
         if self.use_blob_urls:
-            result = run(['pachctl', 'misc', 'generate-download-url', file.as_uri()], capture_output=True)
             data_key = settings.DATA_UNDEFINED_NAME
-            redirect = f"{self.url_scheme}://{self.pachd_address}/archive/{result.stdout.decode().strip()}.zip"
-            archive_path = file.as_uri().replace("@", "/").replace(":", "")
-            return {data_key: f'{settings.HOSTNAME}/data/pfs/?redirect={redirect}&d={archive_path}'}
+            redirect = f"{self.url_scheme}://{self.pachd_address}/pfs/{self.pach_project}/{self.pach_repo}/{self.pach_commit}{key}"
+            path = file.as_uri().replace("@", "/").replace(":", "")
+            return {data_key: f'{settings.HOSTNAME}/data/pfs/?redirect={redirect}&d={path}'}
 
         with client.pfs.pfs_file(file) as obj:
             value = json.loads(obj)
