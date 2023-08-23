@@ -106,8 +106,7 @@ class PachydermImportStorageBase(PachydermMixin, ImportStorage):
         if self.use_blob_urls:
             data_key = settings.DATA_UNDEFINED_NAME
             redirect = f"{self.url_scheme}://{self.pachd_address}/pfs/{self.pach_project}/{self.pach_repo}/{self.pach_commit}{key}"
-            path = file.as_uri().replace("@", "/").replace(":", "")
-            return {data_key: f'{settings.HOSTNAME}/data/pfs/?redirect={redirect}&d={path}'}
+            return {data_key: f'{settings.HOSTNAME}/data/pfs/?redirect={redirect}'}
 
         with client.pfs.pfs_file(file) as obj:
             value = json.loads(obj)
