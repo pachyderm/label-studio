@@ -203,16 +203,15 @@ def localfiles_data(request):
 
 
 def pachyderm_data(request):
-    """Serving files for LocalFilesImportStorage"""
-    path = request.GET.get('d')
+    """Serving files for PachydermImportStorage"""
     redirect_url = request.GET.get('redirect')
 
-    if path and redirect_url and request.user.is_authenticated:
-        content_type, encoding = mimetypes.guess_type(str(path))
+    if redirect_url and request.user.is_authenticated:
+        content_type, _ = mimetypes.guess_type(redirect_url.split("/")[-1])
         content_type = content_type or 'application/octet-stream'
-        with urllib.request.urlopen(url=redirect_url) as archive:
-            archive = io.BytesIO(archive.read())
-            return RangedFileResponse(request, zipfile.ZipFile(archive).open(path), content_type)
+        with urllib.request.urlopen(url=redirect_url) as file:
+            file = io.BytesIO(file.read())
+            return RangedFileResponse(request, file, content_type)
 
     logging.warning("Not Authenticated")
     return HttpResponseForbidden()

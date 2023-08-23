@@ -81,8 +81,6 @@ RUN python3 label_studio/manage.py collectstatic --no-input && \
 
 ENV HOME=/label-studio
 
-RUN curl -o /tmp/pachctl.deb -L https://github.com/pachyderm/pachyderm/releases/download/v2.6.1/pachctl_2.6.1_amd64.deb\
- && dpkg -i /tmp/pachctl.deb
 
 EXPOSE 8080
 
